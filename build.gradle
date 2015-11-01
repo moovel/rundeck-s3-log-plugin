@@ -1,79 +1,88 @@
-version = '1.0.0'
-defaultTasks 'clean','build'
-apply plugin: 'java'
-apply plugin: 'idea'
-sourceCompatibility = 1.5
-ext.rundeckPluginVersion= '1.2'
+plugins {
+	id 'java'
+	id 'maven-publish'
+	id 'com.jfrog.bintray' version '1.2'
+}
 
-/**
- * Set this to a comma-separated list of full classnames of your implemented Rundeck
- * plugins.
- */
-ext.pluginClassNames='org.rundeck.plugins.S3LogFileStoragePlugin'
+group 'com.moovel'
+version = '1.0.0-1'
+
+sourceCompatibility = 1.7
+targetCompatibility = 1.7
+
+ext.rundeckPluginVersion = '1.2'
+
+// Set this to a comma-separated list of full classnames of your implemented Rundeck plugins.
+ext.pluginClassNames = 'org.rundeck.plugins.S3LogFileStoragePlugin'
 
 
 repositories {
-    mavenLocal()
-    mavenCentral()
-
-    maven {
-        // maven snapshot repo since we are using SNAPSHOT of rundeck-core for now
-        url "https://oss.sonatype.org/content/repositories/snapshots/"
-    }
-
-    //use the local third-party directory for included pre-built jars
-    add(new org.apache.ivy.plugins.resolver.FileSystemResolver()) {
-        name = 'thirdparty'
-        addArtifactPattern "$projectDir/third-party/[module]-[revision]/[module]-[revision](-[classifier]).[ext]"
-        descriptor = 'optional'
-        checkmodified = true
-    }
+	mavenLocal()
+	mavenCentral()
 }
 
-configurations{
-    //declare custom pluginLibs configuration to include only libs for this plugin
-    pluginLibs
+configurations {
+	//declare custom pluginLibs configuration to include only libs for this plugin
+	pluginLibs
 
-    //declare compile to extend from pluginLibs so it inherits the dependencies
-    compile{
-        extendsFrom pluginLibs
-    }
+	//declare compile to extend from pluginLibs so it inherits the dependencies
+	compile.extendsFrom pluginLibs
 }
 
 dependencies {
-    // add any third-party jar dependencies you wish to include in the plugin
-    // using the `pluginLibs` configuration as shown here:
-    
-    pluginLibs group: 'com.amazonaws', name: 'aws-java-sdk', version: '1.4.5'
-    
-    
-    //the compile dependency won't add the rundeck-core jar to the plugin contents
-    compile group: 'org.rundeck', name: 'rundeck-core', version: '2.2.0'
-    testCompile group: 'junit', name:'junit', version: '4.11'
-}
+	// add any third-party jar dependencies you wish to include in the plugin
+	// using the `pluginLibs` configuration as shown here:
+	pluginLibs 'com.amazonaws:aws-java-sdk-s3:1.10.30'
 
-// task to copy plugin libs to output/lib dir
-task copyToLib(type: Copy) {
-    into "$buildDir/output/lib"
-    from configurations.pluginLibs
-}
+	//the compile dependency won't add the rundeck-core jar to the plugin contents
+	compile 'org.rundeck:rundeck-core:2.6.1'
 
+	// dependencies required for testing only
+	testCompile 'junit:junit:4.12'
+	testCompile 'org.mockito:mockito-core:1.10.19'
+}
 
 jar {
-    from "$buildDir/output"
-    manifest {
-        def libList = configurations.pluginLibs.collect{'lib/'+it.name}.join(' ')
-        attributes 'Rundeck-Plugin-Classnames': pluginClassNames
-        attributes 'Rundeck-Plugin-File-Version': version
-        attributes 'Rundeck-Plugin-Version': rundeckPluginVersion, 'Rundeck-Plugin-Archive': 'true'
-        attributes 'Rundeck-Plugin-Libs': "${libList}"
-        attributes 'Main-Class': "org.rundeck.plugins.S3LogFileStoragePlugin"
-        attributes 'Class-Path': "${libList} lib/rundeck-core-1.5.4-SNAPSHOT.jar"
-    }
+	from(configurations.pluginLibs) {
+		into("lib")
+	}
+	manifest {
+		def libList = configurations.pluginLibs.collect { 'lib/' + it.name }.join(' ')
+		attributes 'Rundeck-Plugin-Version': rundeckPluginVersion
+		attributes 'Rundeck-Plugin-Archive': 'true'
+		attributes 'Rundeck-Plugin-Classnames': pluginClassNames
+		attributes 'Rundeck-Plugin-File-Version': version
+		attributes 'Rundeck-Plugin-Libs': "${libList}"
+		attributes 'Main-Class': "org.rundeck.plugins.S3LogFileStoragePlugin"
+		attributes 'Class-Path': "${libList}"
+	}
 }
-//set jar task to depend on copyToLib
-jar.dependsOn(copyToLib)
 
-task wrapper(type: Wrapper) {
-    gradleVersion = '1.3'
+task sourcesJar(type: Jar, dependsOn: classes) {
+	classifier = 'sources'
+	from sourceSets.main.allSource
+}
+
+artifacts {
+	archives sourcesJar
+}
+
+publishing {
+	publications {
+		mavenJava(MavenPublication) {
+			from components.java
+			artifact(sourcesJar)
+		}
+	}
+}
+
+bintray {
+	user = project.hasProperty('bintrayUser') ? project.bintrayUser : System.getenv('BINTRAY_USER')
+	key = project.hasProperty('bintrayKey') ? project.bintrayKey : System.getenv('BINTRAY_KEY')
+	publications = ['mavenJava']
+	pkg {
+		repo = 'maven'
+		name = project.name
+		userOrg = 'moovel'
+	}
 }

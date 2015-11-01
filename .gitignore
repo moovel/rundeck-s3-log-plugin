@@ -1,6 +1,16 @@
-*.iws
-*.ipr
+# Intellij
+.idea/
 *.iml
-build
-out
+*.iws
+classes/
+
+# Mac
+.DS_Store
+
+# Gradle
 .gradle
+build
+gradle.properties
+
+# generated sources
+**/src/main/generated/

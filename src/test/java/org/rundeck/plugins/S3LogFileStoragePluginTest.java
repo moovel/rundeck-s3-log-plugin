@@ -1,19 +1,25 @@
 package org.rundeck.plugins;
 
 import com.amazonaws.AmazonClientException;
-import com.amazonaws.AmazonServiceException;
 import com.amazonaws.auth.AWSCredentials;
 import com.amazonaws.regions.Region;
 import com.amazonaws.services.s3.AmazonS3;
 import com.amazonaws.services.s3.model.*;
 import com.dtolabs.rundeck.core.logging.ExecutionFileStorageException;
-import org.junit.Assert;
+import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
+import org.mockito.ArgumentCaptor;
 
 import java.io.*;
-import java.util.*;
+import java.util.Date;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Properties;
+
+import static org.junit.Assert.*;
+import static org.mockito.Mockito.*;
 
 /**
  * $INTERFACE is ... User: greg Date: 6/11/13 Time: 1:59 PM
@@ -23,217 +29,120 @@ public class S3LogFileStoragePluginTest {
 
     final String DEFAULT_FILETYPE = "rdlog";
 
+    private Map<String, Object> testContext;
+    private AmazonS3 amazonS3;
+    private S3LogFileStoragePlugin testPlugin;
+    private OutputStream testOutputStream;
+    private InputStream testInputStream;
+
+    @Before
+    public void before() throws IOException {
+
+        testContext = new HashMap<String, Object>();
+        testContext.put("execid", "testexecid");
+        testContext.put("project", "testproject");
+        testContext.put("url", "http://rundeck:4440/execution/5/show");
+        testContext.put("serverUrl", "http://rundeck:4440");
+        testContext.put("serverUUID", "123");
+
+        amazonS3 = mock(AmazonS3.class);
+
+        testPlugin = new S3LogFileStoragePlugin() {
+            @Override
+            protected AmazonS3 createAmazonS3Client(AWSCredentials awsCredentials) {
+                return amazonS3;
+            }
+
+            @Override
+            protected AmazonS3 createAmazonS3Client() {
+                return amazonS3;
+            }
+        };
+        testPlugin.setPath(S3LogFileStoragePlugin.DEFAULT_PATH_FORMAT);
+        testPlugin.setRegion(S3LogFileStoragePlugin.DEFAULT_REGION);
+        testPlugin.setBucket("testBucket");
+        testPlugin.initialize(testContext);
+
+        testOutputStream = mock(OutputStream.class);
+        testInputStream = mock(InputStream.class);
+        when(testInputStream.read(any(byte[].class), anyInt(), anyInt())).thenReturn(1, -1);
+    }
+
     @Test
     public void expandPathLeadingSlashIsRemoved() {
-        Assert.assertEquals("monkey", S3LogFileStoragePlugin.expandPath("/monkey", testContext()));
+        assertEquals("monkey", S3LogFileStoragePlugin.expandPath("/monkey", testContext));
     }
 
     @Test
     public void expandPathMultiSlashRemoved() {
-        Assert.assertEquals("monkey/test/blah", S3LogFileStoragePlugin.expandPath("/monkey//test///blah",
-                testContext()));
+        assertEquals("monkey/test/blah", S3LogFileStoragePlugin.expandPath("/monkey//test///blah", testContext));
     }
 
     @Test
     public void expandExecId() {
-        Assert.assertEquals("monkey/testexecid/blah", S3LogFileStoragePlugin.expandPath("monkey/${job.execid}/blah",
-                testContext()));
+        assertEquals("monkey/testexecid/blah", S3LogFileStoragePlugin.expandPath("monkey/${job.execid}/blah", testContext));
     }
 
     @Test
     public void expandProject() {
-        Assert.assertEquals("monkey/testproject/blah", S3LogFileStoragePlugin.expandPath("monkey/${job.project}/blah",
-                testContext()));
+        assertEquals("monkey/testproject/blah", S3LogFileStoragePlugin.expandPath("monkey/${job.project}/blah", testContext));
     }
 
     @Test
     public void missingKey() {
-        Assert.assertEquals("monkey/blah", S3LogFileStoragePlugin.expandPath("monkey/${job.id}/blah", testContext()));
+        assertEquals("monkey/blah", S3LogFileStoragePlugin.expandPath("monkey/${job.id}/blah", testContext));
     }
 
     @Test
     public void expandJobId() {
-        Assert.assertEquals("monkey/testjobid/blah", S3LogFileStoragePlugin.expandPath("monkey/${job.id}/blah",
-                testContext2()));
-    }
-
-
-    private HashMap<String, Object> testContext() {
-        HashMap<String, Object> stringHashMap = new HashMap<String, Object>();
-        stringHashMap.put("execid", "testexecid");
-        stringHashMap.put("project", "testproject");
-        stringHashMap.put("url", "http://rundeck:4440/execution/5/show");
-        stringHashMap.put("serverUrl", "http://rundeck:4440");
-        stringHashMap.put("serverUUID", "123");
-        return stringHashMap;
-    }
-
-    private HashMap<String, ?> testContext2() {
-        HashMap<String, Object> stringHashMap = testContext();
-        stringHashMap.put("id", "testjobid");
-        return stringHashMap;
-    }
-
-    class testS3 extends FailS3 {
-        AWSCredentials creds;
-        private Region region;
-        private S3Object getObject;
-
-        testS3(AWSCredentials creds) {
-            this.creds = creds;
-        }
-        testS3(){
-            this.creds=null;
-        }
-
-
-        public boolean getObjectMetadata404 = false;
-        public boolean getObjectMetadataS3Exception = false;
-        public boolean getObjectMetadataClientException = false;
-        public ObjectMetadata getObjectMetadata;
-
-        public ObjectMetadata getObjectMetadata(GetObjectMetadataRequest getObjectMetadataRequest) throws
-                AmazonClientException, AmazonServiceException {
-            if (getObjectMetadata404) {
-                AmazonS3Exception ase = new AmazonS3Exception("test NOT Found");
-                ase.setStatusCode(404);
-                ase.setRequestId("requestId");
-                ase.setExtendedRequestId("extendedRequestId");
-                throw ase;
-            }
-            if (getObjectMetadataS3Exception) {
-                AmazonS3Exception ase = new AmazonS3Exception("blah");
-                ase.setRequestId("requestId");
-                ase.setExtendedRequestId("extendedRequestId");
-                throw ase;
-            }
-            if (getObjectMetadataClientException) {
-                AmazonClientException ase = new AmazonClientException("blah");
-                throw ase;
-            }
-            return getObjectMetadata;
-        }
-
-        public String getObjectBucketName;
-        public String getObjectkey;
-        boolean getObjectClientException = false;
-        boolean getObjectS3Exception = false;
-
-        public S3Object getObject(String bucketName, String key) throws AmazonClientException, AmazonServiceException {
-            getObjectBucketName = bucketName;
-            getObjectkey = key;
-            if (getObjectClientException) {
-                throw new AmazonClientException("getObject");
-            }
-            if (getObjectS3Exception) {
-                throw new AmazonS3Exception("getObject");
-            }
-            return getObject;
-        }
-
-
-        public boolean putObjectClientException = false;
-        public boolean putObjectS3Exception = false;
-        public PutObjectResult putObject;
-        public PutObjectRequest putObjectRequest;
-
-        public PutObjectResult putObject(PutObjectRequest putObjectRequest) throws AmazonClientException,
-                AmazonServiceException {
-            this.putObjectRequest = putObjectRequest;
-            if (putObjectClientException) {
-                throw new AmazonClientException("putObject");
-            }
-            if (putObjectS3Exception) {
-                throw new AmazonS3Exception("putObject");
-            }
-            return putObject;
-        }
-
-
-        public Region getRegion() {
-            return region;
-        }
-
-        public void setRegion(Region region) {
-            this.region = region;
-        }
-    }
-
-    class testPlugin extends S3LogFileStoragePlugin {
-        testPlugin() {
-            setPath(DEFAULT_PATH_FORMAT);
-            setRegion(DEFAULT_REGION);
-        }
-
-        private testS3 testS3;
-
-        @Override
-        protected AmazonS3 createAmazonS3Client(AWSCredentials awsCredentials) {
-            testS3 = new S3LogFileStoragePluginTest.testS3(awsCredentials);
-            return testS3;
-        }
-
-        @Override
-        protected AmazonS3 createAmazonS3Client() {
-            testS3 = new S3LogFileStoragePluginTest.testS3();
-            return testS3;
-        }
-
-        public S3LogFileStoragePluginTest.testS3 getTestS3() {
-            return testS3;
-        }
-
-        public void setTestS3(S3LogFileStoragePluginTest.testS3 testS3) {
-            this.testS3 = testS3;
-        }
+        // setup
+        testContext.put("id", "testjobid");
+        // expect
+        assertEquals("monkey/testjobid/blah", S3LogFileStoragePlugin.expandPath("monkey/${job.id}/blah", testContext));
     }
 
     @Test
     public void initializeUnsetCredentialsAccessKey() {
 
-        testPlugin testPlugin = new S3LogFileStoragePluginTest.testPlugin();
         testPlugin.setAWSSecretKey("blah");
         try {
-            testPlugin.initialize(testContext());
-            Assert.fail("Should thrown exception");
+            testPlugin.initialize(testContext);
+            fail("Should throw an exception");
         } catch (IllegalArgumentException e) {
-            Assert.assertTrue(e.getMessage().contains("must both be configured"));
-            Assert.assertTrue(e.getMessage().contains("AWSAccessKeyId"));
-            Assert.assertTrue(e.getMessage().contains("AWSSecretKey"));
+            assertTrue(e.getMessage().contains("must both be configured"));
+            assertTrue(e.getMessage().contains("AWSAccessKeyId"));
+            assertTrue(e.getMessage().contains("AWSSecretKey"));
         }
     }
 
     @Test
     public void initializeUnsetCredentialsSecretKey() {
 
-        testPlugin testPlugin = new S3LogFileStoragePluginTest.testPlugin();
         testPlugin.setAWSAccessKeyId("blah");
         try {
-            testPlugin.initialize(testContext());
-            Assert.fail("Should thrown exception");
+            testPlugin.initialize(testContext);
+            fail("Should thrown exception");
         } catch (IllegalArgumentException e) {
-            Assert.assertTrue(e.getMessage().contains("must both be configured"));
-            Assert.assertTrue(e.getMessage().contains("AWSAccessKeyId"));
-            Assert.assertTrue(e.getMessage().contains("AWSSecretKey"));
+            assertTrue(e.getMessage().contains("must both be configured"));
+            assertTrue(e.getMessage().contains("AWSAccessKeyId"));
+            assertTrue(e.getMessage().contains("AWSSecretKey"));
         }
     }
 
     @Test
     public void initializeCredentialsFileDoesNotExist() {
 
-        testPlugin testPlugin = new S3LogFileStoragePluginTest.testPlugin();
         testPlugin.setAWSCredentialsFile("/blah/file/does/not/exist");
         try {
-            testPlugin.initialize(testContext());
-            Assert.fail("Should thrown exception");
+            testPlugin.initialize(testContext);
+            fail("Should thrown exception");
         } catch (IllegalArgumentException e) {
-            Assert.assertTrue(e.getMessage().contains("Credentials file does not exist or cannot be read"));
+            assertTrue(e.getMessage().contains("Credentials file does not exist or cannot be read"));
         }
     }
 
     @Test
     public void initializeCredentialsFileMissingCredentials() throws IOException {
-        testPlugin testPlugin = new S3LogFileStoragePluginTest.testPlugin();
         Properties p = new Properties();
         p.setProperty("a", "b");
         File t = File.createTempFile("test-credentials", ".properties");
@@ -241,17 +150,16 @@ public class S3LogFileStoragePluginTest {
         p.store(new FileOutputStream(t), "test");
         testPlugin.setAWSCredentialsFile(t.getAbsolutePath());
         try {
-            testPlugin.initialize(testContext());
-            Assert.fail("Should thrown exception");
+            testPlugin.initialize(testContext);
+            fail("Should throw an exception");
         } catch (IllegalArgumentException e) {
-            Assert.assertTrue(e.getMessage().contains("doesn't contain the expected properties 'accessKey' and " +
-                    "'secretKey'."));
+            assertTrue(e.getMessage().contains("doesn't contain the expected properties 'accessKey' and 'secretKey'."));
         }
     }
 
     @Test
     public void initializeCredentialsFileMissingSecretKey() throws IOException {
-        testPlugin testPlugin = new S3LogFileStoragePluginTest.testPlugin();
+
         Properties p = new Properties();
         p.setProperty("a", "b");
         p.setProperty("accessKey", "c");
@@ -260,17 +168,16 @@ public class S3LogFileStoragePluginTest {
         p.store(new FileOutputStream(t), "test");
         testPlugin.setAWSCredentialsFile(t.getAbsolutePath());
         try {
-            testPlugin.initialize(testContext());
-            Assert.fail("Should thrown exception");
+            testPlugin.initialize(testContext);
+            fail("Should thrown exception");
         } catch (IllegalArgumentException e) {
-            Assert.assertTrue(e.getMessage().contains("doesn't contain the expected properties 'accessKey' and " +
-                    "'secretKey'."));
+            assertTrue(e.getMessage().contains("doesn't contain the expected properties 'accessKey' and 'secretKey'."));
         }
     }
 
     @Test
     public void initializeCredentialsFileMissingAccessKey() throws IOException {
-        testPlugin testPlugin = new S3LogFileStoragePluginTest.testPlugin();
+
         Properties p = new Properties();
         p.setProperty("a", "b");
         p.setProperty("secretKey", "c");
@@ -279,35 +186,34 @@ public class S3LogFileStoragePluginTest {
         p.store(new FileOutputStream(t), "test");
         testPlugin.setAWSCredentialsFile(t.getAbsolutePath());
         try {
-            testPlugin.initialize(testContext());
-            Assert.fail("Should thrown exception");
+            testPlugin.initialize(testContext);
+            fail("Should thrown exception");
         } catch (IllegalArgumentException e) {
-            Assert.assertTrue(e.getMessage().contains("doesn't contain the expected properties 'accessKey' and " +
-                    "'secretKey'."));
+            assertTrue(e.getMessage().contains("doesn't contain the expected properties 'accessKey' and 'secretKey'."));
         }
     }
 
     @Test
     public void initializeValidCredentials() {
-        testPlugin testPlugin = new S3LogFileStoragePluginTest.testPlugin();
+
         testPlugin.setBucket("blah");
         testPlugin.setAWSAccessKeyId("blah");
         testPlugin.setAWSSecretKey("blah");
-        testPlugin.initialize(testContext());
-        Assert.assertNotNull(testPlugin.getTestS3().getRegion());
+        testPlugin.initialize(testContext);
+        verify(amazonS3, atLeastOnce()).setRegion(any(Region.class));
     }
 
     @Test
     public void initializeValidCredentialsDefault() {
-        testPlugin testPlugin = new S3LogFileStoragePluginTest.testPlugin();
+
         testPlugin.setBucket("blah");
-        testPlugin.initialize(testContext());
-        Assert.assertNotNull(testPlugin.getTestS3().getRegion());
+        testPlugin.initialize(testContext);
+        verify(amazonS3, atLeastOnce()).setRegion(any(Region.class));
     }
 
     @Test
     public void initializeValidCredentialsFile() throws IOException {
-        testPlugin testPlugin = new S3LogFileStoragePluginTest.testPlugin();
+
         testPlugin.setBucket("blah");
         Properties p = new Properties();
         p.setProperty("accessKey", "b");
@@ -316,385 +222,345 @@ public class S3LogFileStoragePluginTest {
         t.deleteOnExit();
         p.store(new FileOutputStream(t), "test");
         testPlugin.setAWSCredentialsFile(t.getAbsolutePath());
-        testPlugin.initialize(testContext());
-        Assert.assertNotNull(testPlugin.getTestS3().getRegion());
+        testPlugin.initialize(testContext);
+        verify(amazonS3, atLeastOnce()).setRegion(any(Region.class));
     }
 
     @Test
     public void initializeInvalidRegion() {
-        testPlugin testPlugin = new S3LogFileStoragePluginTest.testPlugin();
+
         testPlugin.setBucket("blah");
         testPlugin.setAWSAccessKeyId("blah");
         testPlugin.setAWSSecretKey("blah");
         testPlugin.setRegion("mulklahoma");
         try {
-            testPlugin.initialize(testContext());
-            Assert.fail("Expected failure");
+            testPlugin.initialize(testContext);
+            fail("Expected failure");
         } catch (IllegalArgumentException e) {
-            Assert.assertTrue(e.getMessage().contains("Region was not found"));
+            assertTrue(e.getMessage().contains("Region was not found"));
         }
     }
 
     @Test
     public void initializeInvalidBucket() {
-        testPlugin testPlugin = new S3LogFileStoragePluginTest.testPlugin();
+
         testPlugin.setBucket("");
         testPlugin.setAWSAccessKeyId("blah");
         testPlugin.setAWSSecretKey("blah");
         try {
-            testPlugin.initialize(testContext());
-            Assert.fail("Expected failure");
+            testPlugin.initialize(testContext);
+            fail("Expected failure");
         } catch (IllegalArgumentException e) {
-            Assert.assertTrue(e.getMessage().contains("bucket was not set"));
+            assertTrue(e.getMessage().contains("bucket was not set"));
         }
     }
 
     @Test
     public void initializeNullBucket() {
-        testPlugin testPlugin = new S3LogFileStoragePluginTest.testPlugin();
+
         testPlugin.setBucket(null);
         testPlugin.setAWSAccessKeyId("blah");
         testPlugin.setAWSSecretKey("blah");
         try {
-            testPlugin.initialize(testContext());
-            Assert.fail("Expected failure");
+            testPlugin.initialize(testContext);
+            fail("Expected failure");
         } catch (IllegalArgumentException e) {
-            Assert.assertTrue(e.getMessage().contains("bucket was not set"));
+            assertTrue(e.getMessage().contains("bucket was not set"));
         }
     }
 
     @Test
     public void initializeNullPath() {
-        testPlugin testPlugin = new S3LogFileStoragePluginTest.testPlugin();
+
         testPlugin.setBucket("asdf");
         testPlugin.setPath(null);
         testPlugin.setAWSAccessKeyId("blah");
         testPlugin.setAWSSecretKey("blah");
         try {
-            testPlugin.initialize(testContext());
-            Assert.fail("Expected failure");
+            testPlugin.initialize(testContext);
+            fail("Expected failure");
         } catch (IllegalArgumentException e) {
-            Assert.assertTrue(e.getMessage().contains("path was not set"));
+            assertTrue(e.getMessage().contains("path was not set"));
         }
     }
 
     @Test
     public void initializeInvalidPath() {
-        testPlugin testPlugin = new S3LogFileStoragePluginTest.testPlugin();
+
         testPlugin.setBucket("basdf");
         testPlugin.setPath("");
         testPlugin.setAWSAccessKeyId("blah");
         testPlugin.setAWSSecretKey("blah");
         try {
-            testPlugin.initialize(testContext());
-            Assert.fail("Expected failure");
+            testPlugin.initialize(testContext);
+            fail("Expected failure");
         } catch (IllegalArgumentException e) {
-            Assert.assertTrue(e.getMessage().contains("path was not set"));
+            assertTrue(e.getMessage().contains("path was not set"));
         }
     }
 
     @Test
     public void initializeInvalidPathNoExecID() {
-        testPlugin testPlugin = new S3LogFileStoragePluginTest.testPlugin();
+
         testPlugin.setBucket("basdf");
         testPlugin.setPath("blah/logs");
         testPlugin.setAWSAccessKeyId("blah");
         testPlugin.setAWSSecretKey("blah");
         try {
-            testPlugin.initialize(testContext());
-            Assert.fail("Expected failure");
+            testPlugin.initialize(testContext);
+            fail("Expected failure");
         } catch (IllegalArgumentException e) {
-            Assert.assertTrue(e.getMessage().contains("path must contain ${job.execid} or end with /"));
+            assertTrue(e.getMessage().contains("path must contain ${job.execid} or end with /"));
         }
     }
 
     @Test
     public void initializePathNoExecIDWithSlash() {
-        testPlugin testPlugin = new S3LogFileStoragePluginTest.testPlugin();
+
         testPlugin.setBucket("basdf");
         testPlugin.setPath("blah/logs/");
         testPlugin.setAWSAccessKeyId("blah");
         testPlugin.setAWSSecretKey("blah");
-        testPlugin.initialize(testContext());
+        testPlugin.initialize(testContext);
     }
 
     @Test
     public void initializePathWithExecIDEndsWithSlash() {
-        testPlugin testPlugin = new S3LogFileStoragePluginTest.testPlugin();
+
         testPlugin.setBucket("basdf");
         testPlugin.setPath("blah/${job.execid}/");
         testPlugin.setAWSAccessKeyId("blah");
         testPlugin.setAWSSecretKey("blah");
         try {
-            testPlugin.initialize(testContext());
-            Assert.fail("Expected failure");
+            testPlugin.initialize(testContext);
+            fail("Expected failure");
         } catch (IllegalArgumentException e) {
-            Assert.assertTrue(e.getMessage().contains("path must not end with /"));
+            assertTrue(e.getMessage().contains("path must not end with /"));
         }
     }
 
     @Test
     public void initializePathWithExecIDValid() {
-        testPlugin testPlugin = new S3LogFileStoragePluginTest.testPlugin();
+
         testPlugin.setBucket("basdf");
         testPlugin.setPath("blah/${job.execid}.blah");
         testPlugin.setAWSAccessKeyId("blah");
         testPlugin.setAWSSecretKey("blah");
-        testPlugin.initialize(testContext());
+        testPlugin.initialize(testContext);
     }
 
     @Test
     public void isAvailable404() throws ExecutionFileStorageException {
-        testPlugin testPlugin = initializeTestPlugin();
-        testPlugin.getTestS3().getObjectMetadata404 = true;
-        Assert.assertFalse(testPlugin.isAvailable(DEFAULT_FILETYPE));
+        // setup
+        AmazonS3Exception ase = new AmazonS3Exception("test NOT Found");
+        ase.setStatusCode(404);
+        ase.setRequestId("requestId");
+        ase.setExtendedRequestId("extendedRequestId");
+        when(amazonS3.getObjectMetadata(any(GetObjectMetadataRequest.class))).thenThrow(ase);
+        // expect
+        assertFalse(testPlugin.isAvailable(DEFAULT_FILETYPE));
     }
 
     @Test
     public void isAvailableOk() throws ExecutionFileStorageException {
-        testPlugin testPlugin = initializeTestPlugin();
-        testPlugin.getTestS3().getObjectMetadata = new ObjectMetadata();
-        Assert.assertTrue(testPlugin.isAvailable(DEFAULT_FILETYPE));
+        // setup
+        when(amazonS3.getObjectMetadata(any(GetObjectMetadataRequest.class))).thenReturn(new ObjectMetadata());
+        assertTrue(testPlugin.isAvailable(DEFAULT_FILETYPE));
     }
 
     @Test
     public void isAvailableS3Exception() {
-        testPlugin testPlugin = initializeTestPlugin();
-        testPlugin.getTestS3().getObjectMetadataS3Exception = true;
+        // setup
+        AmazonS3Exception ase = new AmazonS3Exception("blah");
+        ase.setRequestId("requestId");
+        ase.setExtendedRequestId("extendedRequestId");
+        when(amazonS3.getObjectMetadata(any(GetObjectMetadataRequest.class))).thenThrow(ase);
+        // expect
         try {
             testPlugin.isAvailable(DEFAULT_FILETYPE);
-            Assert.fail("Should throw");
+            fail("Should throw an exception");
         } catch (ExecutionFileStorageException e) {
-            Assert.assertEquals("blah", e.getMessage());
+            assertTrue(e.getMessage().contains("blah"));
         }
     }
 
     @Test
     public void isAvailableClientException() {
-        testPlugin testPlugin = initializeTestPlugin();
-        testPlugin.getTestS3().getObjectMetadataClientException = true;
+        // setup
+        AmazonClientException ase = new AmazonClientException("blah");
+        when(amazonS3.getObjectMetadata(any(GetObjectMetadataRequest.class))).thenThrow(ase);
+        // expect
         try {
             testPlugin.isAvailable(DEFAULT_FILETYPE);
-            Assert.fail("Shoudl throw exception");
+            fail("Should throw an exception");
         } catch (ExecutionFileStorageException e) {
-            Assert.assertEquals("blah", e.getMessage());
+            assertEquals("blah", e.getMessage());
         }
     }
 
     @Test
     public void storeClientException() throws IOException {
-        testPlugin testPlugin = initializeTestPlugin();
-        testPlugin.getTestS3().putObjectClientException = true;
+        // setup
+        AmazonClientException ase = new AmazonClientException("putObject");
+        when(amazonS3.putObject(any(PutObjectRequest.class))).thenThrow(ase);
+        // expect
         boolean result = false;
         try {
             result = testPlugin.store(DEFAULT_FILETYPE, null, 0, null);
-            Assert.fail("should throw");
+            fail("should throw an exception");
         } catch (ExecutionFileStorageException e) {
-            Assert.assertEquals("putObject", e.getMessage());
+            assertEquals("putObject", e.getMessage());
         }
-        Assert.assertFalse(result);
     }
 
     @Test
     public void storeS3Exception() throws IOException {
-        testPlugin testPlugin = initializeTestPlugin();
-        testPlugin.getTestS3().putObjectS3Exception = true;
+        // setup
+        AmazonClientException ase = new AmazonS3Exception("putObject");
+        when(amazonS3.putObject(any(PutObjectRequest.class))).thenThrow(ase);
+        // expect
         boolean result = false;
         try {
             result = testPlugin.store(DEFAULT_FILETYPE, null, 0, null);
-            Assert.fail("should throw");
+            fail("should throw an exception");
         } catch (ExecutionFileStorageException e) {
-            Assert.assertEquals("putObject", e.getMessage());
+            assertTrue(e.getMessage().contains("putObject"));
         }
-        Assert.assertFalse(result);
     }
 
     @Test
     public void storeMetadata() throws IOException, ExecutionFileStorageException {
-        testPlugin testPlugin = initializeTestPlugin();
-        testPlugin.getTestS3().putObject = new PutObjectResult();
+        // setup
+        ArgumentCaptor<PutObjectRequest> putObjectRequestArgumentCaptor = ArgumentCaptor.forClass(PutObjectRequest.class);
+        when(amazonS3.putObject(putObjectRequestArgumentCaptor.capture())).thenReturn(new PutObjectResult());
         Date lastModified = new Date();
         int length = 123;
         boolean result = false;
+        // when
         result = testPlugin.store(DEFAULT_FILETYPE, null, length, lastModified);
-        Assert.assertTrue(result);
-        Assert.assertEquals(length, testPlugin.getTestS3().putObjectRequest.getMetadata().getContentLength());
-        Assert.assertEquals(lastModified, testPlugin.getTestS3().putObjectRequest.getMetadata().getLastModified());
-        Map<String, String> userMetadata = testPlugin.getTestS3().putObjectRequest.getMetadata().getUserMetadata();
-        Assert.assertEquals(5, userMetadata.size());
-        Assert.assertEquals(testContext().get("execid"), userMetadata.get("rundeck.execid"));
-        Assert.assertEquals(testContext().get("project"), userMetadata.get("rundeck.project"));
-        Assert.assertEquals(testContext().get("url"), userMetadata.get("rundeck.url"));
-        Assert.assertEquals(testContext().get("serverUrl"), userMetadata.get("rundeck.serverUrl"));
-        Assert.assertEquals(testContext().get("serverUUID"), userMetadata.get("rundeck.serverUUID"));
-    }
-
-    class testOutputStream extends OutputStream {
-        boolean wasWrite = false;
-        boolean writeIOException = false;
-
-        @Override
-        public void write(int i) throws IOException {
-            wasWrite = true;
-            if (writeIOException) {
-                throw new IOException("testOutputStream.writeIOException");
-            }
-        }
-
-        boolean wasClosed;
-
-        @Override
-        public void close() throws IOException {
-            wasClosed = true;
-        }
-
-    }
-
-    class testInputStream extends InputStream {
-        boolean wasRead = false;
-        int bytes = 1;
-        boolean readIOException = false;
-
-        @Override
-        public int read() throws IOException {
-            wasRead = true;
-            if (readIOException) {
-                throw new IOException("testInputStream.readIOException");
-            }
-            --bytes;
-            return bytes < 0 ? -1 : bytes;
-        }
-
-        boolean wasClosed = false;
-
-        @Override
-        public void close() throws IOException {
-            wasClosed = true;
-            super.close();
-        }
+        // then
+        assertTrue(result);
+        PutObjectRequest putObjectRequest = putObjectRequestArgumentCaptor.getValue();
+        assertEquals(length, putObjectRequest.getMetadata().getContentLength());
+        assertEquals(lastModified, putObjectRequest.getMetadata().getLastModified());
+        Map<String, String> userMetadata = putObjectRequest.getMetadata().getUserMetadata();
+        assertEquals(5, userMetadata.size());
+        assertEquals(testContext.get("execid"), userMetadata.get("rundeck.execid"));
+        assertEquals(testContext.get("project"), userMetadata.get("rundeck.project"));
+        assertEquals(testContext.get("url"), userMetadata.get("rundeck.url"));
+        assertEquals(testContext.get("serverUrl"), userMetadata.get("rundeck.serverUrl"));
+        assertEquals(testContext.get("serverUUID"), userMetadata.get("rundeck.serverUUID"));
     }
 
     @Test
     public void retrieve() throws IOException, ExecutionFileStorageException {
-        testPlugin testPlugin = initializeTestPlugin();
-        testOutputStream stream = new testOutputStream();
-        testInputStream testInputStream = new testInputStream();
+        // setup
+        S3Object s3Object = new S3Object();
+        s3Object.setObjectContent(testInputStream);
+        ArgumentCaptor<String> bucketNameCaptor = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<String> keyCaptor = ArgumentCaptor.forClass(String.class);
+        when(amazonS3.getObject(bucketNameCaptor.capture(), keyCaptor.capture())).thenReturn(s3Object);
 
-        testPlugin.getTestS3().getObject = new S3Object();
-        testPlugin.getTestS3().getObject.setObjectContent(testInputStream);
+        // when
+        boolean result = testPlugin.retrieve(DEFAULT_FILETYPE, testOutputStream);
 
-        boolean result = testPlugin.retrieve(DEFAULT_FILETYPE, stream);
-        Assert.assertTrue(result);
-        Assert.assertEquals("testBucket", testPlugin.getTestS3().getObjectBucketName);
-        Assert.assertEquals("project/testproject/testexecid.rdlog", testPlugin.getTestS3().getObjectkey);
-        Assert.assertTrue(testInputStream.wasRead);
-        Assert.assertTrue(testInputStream.bytes < 0);
-        Assert.assertTrue(testInputStream.wasClosed);
-        Assert.assertTrue(stream.wasWrite);
-        Assert.assertFalse(stream.wasClosed);
+        // then
+        assertTrue(result);
+        assertEquals("testBucket", bucketNameCaptor.getValue());
+        assertEquals("project/testproject/testexecid.rdlog", keyCaptor.getValue());
+        verify(testInputStream, atLeastOnce()).read(any(byte[].class), anyInt(), anyInt());
+        verify(testInputStream, times(1)).close();
+        verify(testOutputStream, atLeastOnce()).write(any(byte[].class), anyInt(), anyInt());
+        verify(testOutputStream, never()).close();
     }
 
     @Test
     public void retrieveClientException() throws IOException {
-        testPlugin testPlugin = initializeTestPlugin();
-        testOutputStream stream = new testOutputStream();
-
-        testPlugin.getTestS3().getObjectClientException = true;
+        // setup
+        doThrow(new IOException("testOutputStream.writeIOException")).when(testOutputStream).write(any(byte[].class), anyInt(), anyInt());
+        ArgumentCaptor<String> bucketNameCaptor = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<String> keyCaptor = ArgumentCaptor.forClass(String.class);
+        when(amazonS3.getObject(bucketNameCaptor.capture(), keyCaptor.capture())).thenThrow(new AmazonClientException("getObject"));
 
         boolean result = false;
         try {
-            result = testPlugin.retrieve(DEFAULT_FILETYPE,stream);
-            Assert.fail("should throw");
+            result = testPlugin.retrieve(DEFAULT_FILETYPE, testOutputStream);
+            fail("should throw");
         } catch (ExecutionFileStorageException e) {
-            Assert.assertEquals("getObject", e.getMessage());
+            assertEquals("getObject", e.getMessage());
         }
-        Assert.assertFalse(result);
-        Assert.assertEquals("testBucket", testPlugin.getTestS3().getObjectBucketName);
-        Assert.assertEquals("project/testproject/testexecid.rdlog", testPlugin.getTestS3().getObjectkey);
-        Assert.assertFalse(stream.wasWrite);
-        Assert.assertFalse(stream.wasClosed);
+        assertEquals("testBucket", bucketNameCaptor.getValue());
+        assertEquals("project/testproject/testexecid.rdlog", keyCaptor.getValue());
+        verify(testOutputStream, never()).write(any(byte[].class), anyInt(), anyInt());
+        verify(testOutputStream, never()).close();
     }
 
     @Test
     public void retrieveS3Exception() throws IOException {
-        testPlugin testPlugin = initializeTestPlugin();
-        testOutputStream stream = new testOutputStream();
-
-        testPlugin.getTestS3().getObjectS3Exception = true;
+        ArgumentCaptor<String> bucketNameCaptor = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<String> keyCaptor = ArgumentCaptor.forClass(String.class);
+        when(amazonS3.getObject(bucketNameCaptor.capture(), keyCaptor.capture())).thenThrow(new AmazonS3Exception("getObject"));
 
         boolean result = false;
         try {
-            result = testPlugin.retrieve(DEFAULT_FILETYPE, stream);
-            Assert.fail("should throw");
+            result = testPlugin.retrieve(DEFAULT_FILETYPE, testOutputStream);
+            fail("should throw");
         } catch (ExecutionFileStorageException e) {
-            Assert.assertEquals("getObject", e.getMessage());
+            assertTrue(e.getMessage().contains("getObject"));
         }
-        Assert.assertFalse(result);
-        Assert.assertEquals("testBucket", testPlugin.getTestS3().getObjectBucketName);
-        Assert.assertEquals("project/testproject/testexecid.rdlog", testPlugin.getTestS3().getObjectkey);
-        Assert.assertFalse(stream.wasWrite);
-        Assert.assertFalse(stream.wasClosed);
+        assertEquals("testBucket", bucketNameCaptor.getValue());
+        assertEquals("project/testproject/testexecid.rdlog", keyCaptor.getValue());
+        verify(testOutputStream, never()).write(any(byte[].class), anyInt(), anyInt());
+        verify(testOutputStream, never()).close();
     }
 
     @Test
     public void retrieveInputIOException() throws IOException, ExecutionFileStorageException {
-        testPlugin testPlugin = initializeTestPlugin();
-        testOutputStream stream = new testOutputStream();
-        testInputStream testInputStream = new testInputStream();
-        testInputStream.readIOException = true;
-
-        testPlugin.getTestS3().getObject = new S3Object();
-        testPlugin.getTestS3().getObject.setObjectContent(testInputStream);
+        S3Object s3Object = new S3Object();
+        s3Object.setObjectContent(testInputStream);
+        doThrow(new IOException("testInputStream.readIOException")).when(testInputStream).read(any(byte[].class), anyInt(), anyInt());
+        ArgumentCaptor<String> bucketNameCaptor = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<String> keyCaptor = ArgumentCaptor.forClass(String.class);
+        when(amazonS3.getObject(bucketNameCaptor.capture(), keyCaptor.capture())).thenReturn(s3Object);
 
         boolean result = false;
         try {
-            result = testPlugin.retrieve(DEFAULT_FILETYPE, stream);
-            Assert.fail("should throw exception");
+            result = testPlugin.retrieve(DEFAULT_FILETYPE, testOutputStream);
+            fail("should throw exception");
         } catch (IOException e) {
-            Assert.assertEquals("testInputStream.readIOException", e.getMessage());
+            assertEquals("testInputStream.readIOException", e.getMessage());
         }
-        Assert.assertFalse(result);
-        Assert.assertEquals("testBucket", testPlugin.getTestS3().getObjectBucketName);
-        Assert.assertEquals("project/testproject/testexecid.rdlog", testPlugin.getTestS3().getObjectkey);
-        Assert.assertTrue(testInputStream.wasRead);
-        Assert.assertFalse(testInputStream.bytes < 0);
-        Assert.assertTrue(testInputStream.wasClosed);
-        Assert.assertFalse(stream.wasWrite);
-        Assert.assertFalse(stream.wasClosed);
+        assertEquals("testBucket", bucketNameCaptor.getValue());
+        assertEquals("project/testproject/testexecid.rdlog", keyCaptor.getValue());
+        verify(testInputStream, atLeastOnce()).read(any(byte[].class), anyInt(), anyInt());
+        verify(testInputStream, times(1)).close();
+        verify(testOutputStream, never()).write(any(byte[].class), anyInt(), anyInt());
+        verify(testOutputStream, never()).close();
     }
 
     @Test
     public void retrieveOutputIOException() throws IOException, ExecutionFileStorageException {
-        testPlugin testPlugin = initializeTestPlugin();
-        testOutputStream stream = new testOutputStream();
-        stream.writeIOException = true;
-        testInputStream testInputStream = new testInputStream();
-
-        testPlugin.getTestS3().getObject = new S3Object();
-        testPlugin.getTestS3().getObject.setObjectContent(testInputStream);
+        S3Object s3Object = new S3Object();
+        s3Object.setObjectContent(testInputStream);
+        when(testInputStream.read()).thenReturn(-1);
+        doThrow(new IOException("testOutputStream.writeIOException")).when(testOutputStream).write(any(byte[].class), anyInt(), anyInt());
+        ArgumentCaptor<String> bucketNameCaptor = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<String> keyCaptor = ArgumentCaptor.forClass(String.class);
+        when(amazonS3.getObject(bucketNameCaptor.capture(), keyCaptor.capture())).thenReturn(s3Object);
 
         boolean result = false;
         try {
-            result = testPlugin.retrieve(DEFAULT_FILETYPE, stream);
-            Assert.fail("should throw exception");
+            result = testPlugin.retrieve(DEFAULT_FILETYPE, testOutputStream);
+            fail("should throw exception");
         } catch (IOException e) {
-            Assert.assertEquals("testOutputStream.writeIOException", e.getMessage());
+            assertEquals("testOutputStream.writeIOException", e.getMessage());
         }
-        Assert.assertFalse(result);
-        Assert.assertEquals("testBucket", testPlugin.getTestS3().getObjectBucketName);
-        Assert.assertEquals("project/testproject/testexecid.rdlog", testPlugin.getTestS3().getObjectkey);
-        Assert.assertTrue(testInputStream.wasRead);
-        Assert.assertTrue(testInputStream.wasClosed);
-        Assert.assertTrue(stream.wasWrite);
-        Assert.assertFalse(stream.wasClosed);
+        assertEquals("testBucket", bucketNameCaptor.getValue());
+        assertEquals("project/testproject/testexecid.rdlog", keyCaptor.getValue());
+        verify(testInputStream, atLeastOnce()).read(any(byte[].class), anyInt(), anyInt());
+        verify(testInputStream, times(1)).close();
+        verify(testOutputStream, atLeastOnce()).write(any(byte[].class), anyInt(), anyInt());
+        verify(testOutputStream, never()).close();
     }
 
-    private testPlugin initializeTestPlugin() {
-        testPlugin testPlugin = new S3LogFileStoragePluginTest.testPlugin();
-        testPlugin.setAWSAccessKeyId("blah");
-        testPlugin.setAWSSecretKey("blah");
-        testPlugin.setBucket("testBucket");
-        testPlugin.initialize(testContext());
-        return testPlugin;
-    }
 }
